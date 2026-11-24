@@ -96,7 +96,7 @@ function hideProgress() {
 function setBusy(b: boolean) {
   busy = b;
   document.body.classList.toggle("busy", b);
-  document.querySelectorAll<HTMLButtonElement>("button[data-act]:not([data-act=toggle]), #btn-backup-all, #btn-refresh").forEach((btn) => {
+  document.querySelectorAll<HTMLButtonElement>("button[data-act]:not([data-act=toggle]), #btn-backup-all, #btn-restore-newer, #btn-refresh").forEach((btn) => {
     btn.disabled = b || btn.dataset.disabled === "1";
   });
 }
@@ -142,7 +142,10 @@ function worldCard(w: WorldEntry): string {
   const canRestore = !!latest && !inUse && !!overview?.worldsDirOk;
   const restoreFirst = w.status === "backupNewer" || w.status === "onlyInBackup";
   const isOpen = expanded.has(w.id);
-  const sub = [w.id, w.system && `${w.system}${w.systemVersion ? " " + w.systemVersion : ""}`, w.coreVersion && `Foundry ${w.coreVersion}`]
+  const isData = w.kind === "data";
+  const sub = isData
+    ? esc(w.local ? `${w.system ?? ""} · everything in Data except worlds` : "Everything in Foundry's Data folder except worlds")
+    : [w.id, w.system && `${w.system}${w.systemVersion ? " " + w.systemVersion : ""}`, w.coreVersion && `Foundry ${w.coreVersion}`]
     .filter(Boolean)
     .map((s) => esc(s as string))
     .join(" · ");
@@ -164,14 +167,14 @@ function worldCard(w: WorldEntry): string {
     )
     .join("");
 
-  return `<article class="card world ${isOpen ? "open" : ""}" data-world="${esc(w.id)}">
+  return `<article class="card world ${isData ? "data" : ""} ${isOpen ? "open" : ""}" data-world="${esc(w.id)}">
     <div class="world-head">
       <div class="world-title">
         <h2>${esc(w.title)}</h2>
         <p class="muted small">${sub}</p>
       </div>
       <div class="badges">
-        ${inUse ? `<span class="badge danger" title="Foundry has this world open. Return to setup in Foundry to back up or restore.">Open in Foundry</span>` : ""}
+        ${inUse ? `<span class="badge danger" title="Foundry has ${isData ? "a world" : "this world"} open. Return to setup in Foundry to back up or restore.">${isData ? "World open in Foundry" : "Open in Foundry"}</span>` : ""}
         <span class="badge ${st.cls}" title="${esc(st.hint)}${w.statusGuessed ? " (estimated from file dates)" : ""}">${st.label}${w.statusGuessed ? "?" : ""}</span>
       </div>
     </div>
@@ -257,7 +260,7 @@ async function backupAll() {
   const skipped = targets.filter((w) => w.local!.inUse);
   const todo = targets.filter((w) => !w.local!.inUse);
   if (!todo.length) {
-    toast(skipped.length ? "All worlds are open in Foundry — nothing to back up." : "No local worlds to back up.", "info");
+    toast(skipped.length ? "Everything is open in Foundry — return to setup first." : "Nothing to back up.", "info");
     return;
   }
   setBusy(true);
@@ -266,7 +269,7 @@ async function backupAll() {
   hideProgress();
   setBusy(false);
   const skipNote = skipped.length ? ` Skipped (open in Foundry): ${skipped.map((w) => w.title).join(", ")}.` : "";
-  toast(`Backed up ${ok} of ${todo.length} world(s).${skipNote}`, ok === todo.length ? "ok" : "error");
+  toast(`Backed up ${ok} of ${todo.length}.${skipNote}`, ok === todo.length ? "ok" : "error");
   await refresh();
 }
 
@@ -275,28 +278,64 @@ async function restore(id: string, fileName: string) {
   const w = findWorld(id);
   const b = w?.backups.find((x) => x.fileName === fileName);
   if (!w || !b) return;
+  const from = `${fmtDate(b.created)} (${b.host ?? "unknown PC"})`;
+  const isData = w.kind === "data";
   const lines = [
-    w.local
-      ? `Replace the world “${w.title}” on this PC with the backup from ${fmtDate(b.created)} (${b.host ?? "unknown PC"})?`
-      : `Restore “${w.title}” to this PC from the backup of ${fmtDate(b.created)} (${b.host ?? "unknown PC"})?`,
+    isData
+      ? `Replace the modules, systems and assets on this PC with the backup from ${from}?`
+      : w.local
+        ? `Replace the world “${w.title}” on this PC with the backup from ${from}?`
+        : `Restore “${w.title}” to this PC from the backup of ${from}?`,
   ];
   if (w.status === "localNewer" || w.status === "conflict" || w.status === "noBackup") {
     lines.push("", "⚠️ This PC has changes that are not in any backup. They will be replaced.");
   }
-  if (w.local) lines.push("", "A safety copy of the current world is saved locally first.");
-  const yes = await ask(lines.join("\n"), { title: "Restore world", kind: "warning", okLabel: "Restore", cancelLabel: "Cancel" });
+  if (isData) lines.push("", "Your worlds are not touched. The current folders are kept in “Data-before-restore” in Foundry's user data folder.");
+  else if (w.local) lines.push("", "A safety copy of the current world is saved locally first.");
+  const yes = await ask(lines.join("\n"), { title: isData ? "Restore modules & systems" : "Restore world", kind: "warning", okLabel: "Restore", cancelLabel: "Cancel" });
   if (!yes) return;
 
   setBusy(true);
-  showProgress(`Restoring “${w.title}”…`, null);
-  try {
-    await api.restoreWorld(id, fileName);
-    toast(`Restored “${w.title}” from ${fmtDate(b.created)}.`, "ok");
-  } catch (e) {
-    toast(`Restore failed: ${errText(e)}`, "error");
-  }
+  await doRestore(w, b);
   hideProgress();
   setBusy(false);
+  await refresh();
+}
+
+async function doRestore(w: WorldEntry, b: BackupInfo): Promise<boolean> {
+  showProgress(`Restoring “${w.title}”…`, null);
+  try {
+    await api.restoreWorld(w.id, b.fileName);
+    toast(`Restored “${w.title}” from ${fmtDate(b.created)}.`, "ok");
+    return true;
+  } catch (e) {
+    toast(`Restore of “${w.title}” failed: ${errText(e)}`, "error");
+    return false;
+  }
+}
+
+/** Restores everything that has a newer backup (e.g. from another PC). */
+async function restoreAllNewer() {
+  if (busy || !overview) return;
+  const candidates = overview.worlds.filter((w) => w.backups.length && (w.status === "backupNewer" || w.status === "onlyInBackup"));
+  const todo = candidates.filter((w) => !w.local?.inUse);
+  const open = candidates.filter((w) => w.local?.inUse);
+  const conflicts = overview.worlds.filter((w) => w.status === "conflict");
+  if (!todo.length) {
+    const why = open.length ? " Some are open in Foundry — return to setup first." : "";
+    toast(`Nothing newer to restore.${why}${conflicts.length ? ` Conflicts need a manual choice: ${conflicts.map((w) => w.title).join(", ")}.` : ""}`, "info");
+    return;
+  }
+  const lines = ["Restore the newest backup of:", "", ...todo.map((w) => `• ${w.title} — ${fmtDate(w.backups[0].created)} (${w.backups[0].host ?? "unknown PC"})`)];
+  if (conflicts.length) lines.push("", `Skipped (conflict, choose manually): ${conflicts.map((w) => w.title).join(", ")}`);
+  const yes = await ask(lines.join("\n"), { title: "Restore all newer", kind: "warning", okLabel: "Restore", cancelLabel: "Cancel" });
+  if (!yes) return;
+  setBusy(true);
+  let ok = 0;
+  for (const w of todo) if (await doRestore(w, w.backups[0])) ok++;
+  hideProgress();
+  setBusy(false);
+  toast(`Restored ${ok} of ${todo.length}.`, ok === todo.length ? "ok" : "error");
   await refresh();
 }
 
@@ -305,6 +344,12 @@ async function restore(id: string, fileName: string) {
 function wire() {
   $("btn-refresh").addEventListener("click", () => !busy && refresh());
   $("btn-backup-all").addEventListener("click", backupAll);
+  $("btn-restore-newer").addEventListener("click", restoreAllNewer);
+  $("btn-open-userdata").addEventListener("click", async () => {
+    const dir = await api.userDataDir();
+    if (!dir) return toast("Could not find Foundry's user data folder.", "error");
+    api.openFolder(dir).catch((e) => toast(errText(e), "error"));
+  });
 
   $("btn-choose-backup").addEventListener("click", async () => {
     const p = await chooseFolder(settings.backupDir, "Choose the backup (cloud) folder");

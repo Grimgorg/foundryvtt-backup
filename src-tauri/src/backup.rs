@@ -16,6 +16,13 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 pub const MANIFEST_NAME: &str = "fvtt-backup.json";
+/// Backup id for everything in Foundry's `Data` folder except `worlds`
+/// (modules, systems, assets, ...). Stored like a world in the backup dir.
+pub const DATA_ID: &str = "_foundry-data";
+/// Name of the folder inside a data backup zip.
+pub const DATA_PREFIX: &str = "Data";
+/// Top-level folders of `Data` that the data backup leaves out.
+pub const DATA_SKIP: &[&str] = &["worlds"];
 const TS_FORMAT: &str = "%Y-%m-%dT%H-%M-%SZ";
 const PARTIAL_SUFFIX: &str = ".partial";
 
@@ -180,18 +187,7 @@ pub fn create_backup(
             "“{world_id}” is open in Foundry. Close the world (return to setup) first."
         )));
     }
-    let target_dir = backup_dir.join(world_id);
-    fs::create_dir_all(&target_dir).context(format!("Cannot create {}", target_dir.display()))?;
-
-    // Pick a unique name (two backups in the same second get +1s).
-    let mut created = Utc::now().with_nanosecond(0).unwrap_or_else(Utc::now);
-    let mut file_name = backup_file_name(world_id, created, host);
-    while target_dir.join(&file_name).exists() {
-        created += chrono::Duration::seconds(1);
-        file_name = backup_file_name(world_id, created, host);
-    }
-    let final_path = target_dir.join(&file_name);
-
+    let (created, file_name, final_path) = new_backup_path(backup_dir, world_id, host)?;
     let manifest = Manifest {
         format: 1,
         app_version: env!("CARGO_PKG_VERSION").into(),
@@ -201,14 +197,102 @@ pub fn create_backup(
         file_count: 0,
         size: 0,
     };
-    write_zip_atomic(&world_dir, world_id, Some(manifest), &final_path, progress)?;
+    write_zip_atomic(
+        &world_dir,
+        world_id,
+        &[],
+        Some(manifest),
+        &final_path,
+        progress,
+    )?;
+    finish_backup(
+        backup_dir, world_id, host, keep_last, created, file_name, final_path,
+    )
+}
 
-    let size = fs::metadata(&final_path).map(|m| m.len()).unwrap_or(0);
-    apply_retention(backup_dir, world_id, keep_last)?;
+/// Backs up everything in Foundry's `Data` folder except `worlds`: modules,
+/// systems, assets and any other folders. Fails if Foundry has a world open
+/// (modules' compendium packs are locked then).
+pub fn create_data_backup(
+    data_dir: &Path,
+    backup_dir: &Path,
+    host: &str,
+    keep_last: u32,
+    progress: Progress,
+) -> Result<BackupInfo> {
+    if !data_dir.is_dir() {
+        return Err(AppError::new(format!(
+            "Foundry Data folder not found: {}",
+            data_dir.display()
+        )));
+    }
+    if foundry::is_data_in_use(data_dir, DATA_SKIP) {
+        return Err(AppError::new(
+            "A world is open in Foundry. Return to setup in Foundry first.",
+        ));
+    }
+    let (created, file_name, final_path) = new_backup_path(backup_dir, DATA_ID, host)?;
+    let manifest = Manifest {
+        format: 1,
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        created,
+        host: host.into(),
+        world: WorldMeta {
+            id: DATA_ID.into(),
+            title: Some(DATA_TITLE.into()),
+            ..Default::default()
+        },
+        file_count: 0,
+        size: 0,
+    };
+    write_zip_atomic(
+        data_dir,
+        DATA_PREFIX,
+        DATA_SKIP,
+        Some(manifest),
+        &final_path,
+        progress,
+    )?;
+    finish_backup(
+        backup_dir, DATA_ID, host, keep_last, created, file_name, final_path,
+    )
+}
+
+pub const DATA_TITLE: &str = "Modules, systems & assets";
+
+/// Picks a unique file name for a new backup (+1s if the name is taken).
+fn new_backup_path(
+    backup_dir: &Path,
+    id: &str,
+    host: &str,
+) -> Result<(DateTime<Utc>, String, PathBuf)> {
+    let target_dir = backup_dir.join(id);
+    fs::create_dir_all(&target_dir).context(format!("Cannot create {}", target_dir.display()))?;
+    let mut created = Utc::now().with_nanosecond(0).unwrap_or_else(Utc::now);
+    let mut file_name = backup_file_name(id, created, host);
+    while target_dir.join(&file_name).exists() {
+        created += chrono::Duration::seconds(1);
+        file_name = backup_file_name(id, created, host);
+    }
+    let path = target_dir.join(&file_name);
+    Ok((created, file_name, path))
+}
+
+fn finish_backup(
+    backup_dir: &Path,
+    id: &str,
+    host: &str,
+    keep_last: u32,
+    created: DateTime<Utc>,
+    file_name: String,
+    path: PathBuf,
+) -> Result<BackupInfo> {
+    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    apply_retention(backup_dir, id, keep_last)?;
     Ok(BackupInfo {
         file_name,
-        path: final_path.to_string_lossy().into_owned(),
-        world_id: world_id.into(),
+        path: path.to_string_lossy().into_owned(),
+        world_id: id.into(),
         created,
         host: Some(host.into()),
         size,
@@ -216,16 +300,18 @@ pub fn create_backup(
 }
 
 /// Zips `src_dir` (entries under `<prefix>/`) to `dest` via `dest.partial`,
-/// renaming only after the zip is complete and flushed.
+/// renaming only after the zip is complete and flushed. Top-level entries
+/// named in `skip_top` are left out.
 pub fn write_zip_atomic(
     src_dir: &Path,
     prefix: &str,
+    skip_top: &[&str],
     manifest: Option<Manifest>,
     dest: &Path,
     progress: Progress,
 ) -> Result<()> {
     let partial = PathBuf::from(format!("{}{PARTIAL_SUFFIX}", dest.display()));
-    let result = write_zip(src_dir, prefix, manifest, &partial, progress)
+    let result = write_zip(src_dir, prefix, skip_top, manifest, &partial, progress)
         .and_then(|_| fs::rename(&partial, dest).map_err(AppError::from));
     if result.is_err() {
         let _ = fs::remove_file(&partial);
@@ -236,6 +322,7 @@ pub fn write_zip_atomic(
 fn write_zip(
     src_dir: &Path,
     prefix: &str,
+    skip_top: &[&str],
     manifest: Option<Manifest>,
     dest: &Path,
     progress: Progress,
@@ -243,6 +330,7 @@ fn write_zip(
     let files: Vec<walkdir::DirEntry> = WalkDir::new(src_dir)
         .sort_by_file_name()
         .into_iter()
+        .filter_entry(|e| !foundry::is_skipped_top(e, skip_top))
         .collect::<std::result::Result<_, _>>()?;
     let total = files.iter().filter(|e| e.file_type().is_file()).count() as u64;
     let out = File::create(dest).context(format!("Cannot write {}", dest.display()))?;

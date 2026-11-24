@@ -32,6 +32,8 @@ export type Status =
   | "noBackup";
 
 export interface WorldEntry {
+  /** "data" = modules, systems & assets; "world" = a single world. */
+  kind: "world" | "data";
   id: string;
   title: string;
   system: string | null;
@@ -67,5 +69,6 @@ export const api = {
   restoreWorld: (worldId: string, fileName: string) =>
     invoke<void>("restore_world", { worldId, fileName }),
   openFolder: (path: string) => invoke<void>("open_folder", { path }),
+  userDataDir: () => invoke<string | null>("user_data_dir"),
   safetyDir: () => invoke<string>("safety_dir"),
 };

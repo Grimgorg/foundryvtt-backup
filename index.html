@@ -16,7 +16,8 @@
       </div>
       <div class="spacer"></div>
       <button id="btn-refresh" class="btn ghost" title="Reload worlds and backups">Refresh</button>
-      <button id="btn-backup-all" class="btn primary">Back up all</button>
+      <button id="btn-restore-newer" class="btn" title="Restore every world (and modules/systems) that has a newer backup, e.g. from another PC">Restore all newer</button>
+      <button id="btn-backup-all" class="btn primary" title="Back up all worlds plus modules, systems and assets">Back up all</button>
     </header>
 
     <main>
@@ -36,6 +37,9 @@
             <button class="btn" id="btn-choose-worlds">Choose…</button>
             <button class="btn ghost" id="btn-detect-worlds" title="Find Foundry's default worlds folder">Auto-detect</button>
             <button class="btn ghost" id="btn-open-worlds" title="Open in file manager">Open</button>
+          </div>
+          <div class="path-row secondary">
+            <button class="btn ghost small" id="btn-open-userdata" title="Open Foundry's user data folder (Config, Data, Logs) in Finder / Explorer">Open Foundry user data folder</button>
           </div>
         </div>
         <div class="setting inline">

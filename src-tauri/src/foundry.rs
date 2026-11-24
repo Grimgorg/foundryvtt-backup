@@ -122,9 +122,18 @@ pub struct ScanStats {
 /// The fingerprint changes whenever a file is added, removed, resized or
 /// modified. It uses FNV-1a so it stays stable across app versions.
 pub fn scan(dir: &Path) -> ScanStats {
+    scan_filtered(dir, &[])
+}
+
+/// Like [`scan`], but leaves out top-level entries named in `skip_top`.
+pub fn scan_filtered(dir: &Path, skip_top: &[&str]) -> ScanStats {
     let mut entries: Vec<(String, u64, i128)> = Vec::new();
     let mut newest: Option<std::time::SystemTime> = None;
-    for e in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    for e in WalkDir::new(dir)
+        .into_iter()
+        .filter_entry(|e| !is_skipped_top(e, skip_top))
+        .filter_map(|e| e.ok())
+    {
         if !e.file_type().is_file() {
             continue;
         }
@@ -183,8 +192,52 @@ impl Fnv {
 /// world data in LevelDB databases; LevelDB holds a lock on each database's
 /// `LOCK` file while it is open.
 pub fn is_world_in_use(world_dir: &Path) -> bool {
-    WalkDir::new(world_dir)
-        .max_depth(4)
+    is_dir_in_use(world_dir, 4)
+}
+
+/// True if a LevelDB inside `Data` (outside `skip_top`, e.g. a module's
+/// compendium pack) is open in Foundry.
+pub fn is_data_in_use(data_dir: &Path, skip_top: &[&str]) -> bool {
+    let Ok(rd) = fs::read_dir(data_dir) else {
+        return false;
+    };
+    rd.filter_map(|e| e.ok())
+        .filter(|e| {
+            let n = e.file_name();
+            !skip_top.iter().any(|s| n == *s)
+        })
+        .any(|e| is_dir_in_use(&e.path(), 5))
+}
+
+/// True for a depth-1 walkdir entry whose name is in `skip_top`.
+pub fn is_skipped_top(e: &walkdir::DirEntry, skip_top: &[&str]) -> bool {
+    e.depth() == 1 && skip_top.iter().any(|s| e.file_name() == *s)
+}
+
+/// The `Data` folder that holds `worlds_dir` (Foundry's `Data/worlds`).
+pub fn data_dir_of(worlds_dir: &Path) -> Option<PathBuf> {
+    if worlds_dir.file_name()? != "worlds" {
+        return None;
+    }
+    worlds_dir
+        .parent()
+        .filter(|p| p.is_dir())
+        .map(Path::to_path_buf)
+}
+
+/// Foundry's user-data folder (the one with `Config`, `Data`, `Logs`) for
+/// the configured worlds folder, else the OS default.
+pub fn user_data_dir_for(worlds_dir: Option<&Path>) -> Option<PathBuf> {
+    worlds_dir
+        .and_then(data_dir_of)
+        .and_then(|d| d.parent().map(Path::to_path_buf))
+        .filter(|p| p.is_dir())
+        .or_else(|| default_user_data_dir().filter(|p| p.is_dir()))
+}
+
+fn is_dir_in_use(dir: &Path, depth: usize) -> bool {
+    WalkDir::new(dir)
+        .max_depth(depth)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file() && e.file_name() == "LOCK")

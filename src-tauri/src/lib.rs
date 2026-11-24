@@ -5,7 +5,7 @@ mod restore;
 mod settings;
 mod sync_state;
 
-use backup::BackupInfo;
+use backup::{BackupInfo, DATA_ID, DATA_SKIP};
 use chrono::{DateTime, Utc};
 use error::{AppError, Result};
 use serde::Serialize;
@@ -63,6 +63,8 @@ struct LocalInfo {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WorldEntry {
+    /// "world", or "data" for the modules/systems/assets entry.
+    kind: &'static str,
     id: String,
     title: String,
     system: Option<String>,
@@ -118,8 +120,19 @@ fn progress_emitter(app: AppHandle, world_id: String, op: &'static str) -> impl 
     }
 }
 
+/// Fingerprint of a world folder, or of `Data` without worlds for DATA_ID.
+fn local_fingerprint(worlds_dir: &Path, id: &str) -> String {
+    if id == DATA_ID {
+        foundry::data_dir_of(worlds_dir)
+            .map(|d| foundry::scan_filtered(&d, DATA_SKIP).fingerprint)
+            .unwrap_or_default()
+    } else {
+        foundry::scan(&worlds_dir.join(id)).fingerprint
+    }
+}
+
 fn record_sync(state_path: &Path, worlds_dir: &Path, world_id: &str, b: &BackupInfo) {
-    let fp = foundry::scan(&worlds_dir.join(world_id)).fingerprint;
+    let fp = local_fingerprint(worlds_dir, world_id);
     let mut st = SyncState::load(state_path);
     st.0.insert(
         world_id.to_string(),
@@ -147,6 +160,7 @@ fn build_overview(s: &Settings, sync_state_path: &Path) -> Overview {
     }
     ids.sort();
     ids.dedup();
+    ids.retain(|id| id != DATA_ID);
 
     let mut worlds: Vec<WorldEntry> = ids
         .into_iter()
@@ -181,6 +195,7 @@ fn build_overview(s: &Settings, sync_state_path: &Path) -> Overview {
                     }),
             };
             WorldEntry {
+                kind: "world",
                 title: meta.title.clone().unwrap_or_else(|| id.clone()),
                 id: id.clone(),
                 system: meta.system,
@@ -202,6 +217,69 @@ fn build_overview(s: &Settings, sync_state_path: &Path) -> Overview {
         })
         .collect();
     worlds.sort_by_key(|w| w.title.to_lowercase());
+
+    // Modules, systems & assets go first.
+    let data_dir = worlds_dir.as_deref().and_then(foundry::data_dir_of);
+    let data_backups = backup_dir
+        .as_ref()
+        .map(|b| backup::list_backups(b, DATA_ID))
+        .unwrap_or_default();
+    if data_dir.is_some() || !data_backups.is_empty() {
+        let local = data_dir
+            .as_ref()
+            .map(|d| (d, foundry::scan_filtered(d, DATA_SKIP)));
+        let record = state.0.get(DATA_ID);
+        let (status, guessed) = compute_status(
+            local.as_ref().map(|(_, st)| LocalFacts {
+                fingerprint: &st.fingerprint,
+                modified: st.modified,
+            }),
+            data_backups.first(),
+            record,
+            &host,
+        );
+        let count = |sub: &str| {
+            data_dir
+                .as_ref()
+                .and_then(|d| std::fs::read_dir(d.join(sub)).ok())
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        let summary = local.as_ref().map(|_| {
+            format!(
+                "{} modules · {} systems",
+                count("modules"),
+                count("systems")
+            )
+        });
+        worlds.insert(
+            0,
+            WorldEntry {
+                kind: "data",
+                id: DATA_ID.into(),
+                title: backup::DATA_TITLE.into(),
+                system: summary,
+                system_version: None,
+                core_version: None,
+                last_played: None,
+                local: local.map(|(d, st)| LocalInfo {
+                    path: d.to_string_lossy().into_owned(),
+                    modified: st.modified,
+                    size: st.size,
+                    file_count: st.files,
+                    in_use: foundry::is_data_in_use(d, DATA_SKIP),
+                }),
+                backups: data_backups,
+                status,
+                status_guessed: guessed,
+                last_sync: record.cloned(),
+            },
+        );
+    }
 
     Overview {
         host,
@@ -255,7 +333,14 @@ async fn backup_world(
         let (worlds, backups) = require_dirs(&s)?;
         let progress = progress_emitter(app, world_id.clone(), "backup");
         let host = backup::this_host();
-        let b = backup::create_backup(&worlds, &backups, &world_id, &host, s.keep_last, &progress)?;
+        let b = if world_id == DATA_ID {
+            let data = foundry::data_dir_of(&worlds).ok_or_else(|| {
+                AppError::new("The worlds folder must be Foundry's Data/worlds folder.")
+            })?;
+            backup::create_data_backup(&data, &backups, &host, s.keep_last, &progress)?
+        } else {
+            backup::create_backup(&worlds, &backups, &world_id, &host, s.keep_last, &progress)?
+        };
         record_sync(&state_path, &worlds, &world_id, &b);
         Ok(b)
     })
@@ -287,13 +372,20 @@ async fn restore_world(
             .find(|b| b.file_name == file_name)
             .ok_or_else(|| AppError::new("That backup no longer exists."))?;
         let progress = progress_emitter(app, world_id.clone(), "restore");
-        restore::restore_backup(
-            Path::new(&info.path),
-            &worlds,
-            &world_id,
-            Some(&safety),
-            &progress,
-        )?;
+        if world_id == DATA_ID {
+            let data = foundry::data_dir_of(&worlds).ok_or_else(|| {
+                AppError::new("The worlds folder must be Foundry's Data/worlds folder.")
+            })?;
+            restore::restore_data_backup(Path::new(&info.path), &data, &progress)?;
+        } else {
+            restore::restore_backup(
+                Path::new(&info.path),
+                &worlds,
+                &world_id,
+                Some(&safety),
+                &progress,
+            )?;
+        }
         record_sync(&state_path, &worlds, &world_id, &info);
         Ok(())
     })
@@ -308,6 +400,14 @@ fn open_folder(app: AppHandle, path: String) -> Result<()> {
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|e| AppError::new(e.to_string()))
+}
+
+/// Foundry's user-data folder (Config, Data, Logs) on this PC.
+#[tauri::command]
+fn user_data_dir(state: State<AppState>) -> Option<String> {
+    let s = state.settings.lock().unwrap().clone();
+    foundry::user_data_dir_for(dir_of(&s.worlds_dir).as_deref())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -349,6 +449,7 @@ pub fn run() {
             backup_world,
             restore_world,
             open_folder,
+            user_data_dir,
             safety_dir
         ])
         .run(tauri::generate_context!())

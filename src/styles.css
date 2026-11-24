@@ -231,3 +231,6 @@ footer { text-align: center; font-size: 12px; padding: 12px 20px 16px; }
   .path-row input { flex-basis: 100%; }
   .facts { grid-template-columns: 1fr; }
 }
+
+.path-row.secondary { margin-top: 6px; }
+.world.data { border-left: 4px solid var(--accent); }

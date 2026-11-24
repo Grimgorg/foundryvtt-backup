@@ -1,6 +1,6 @@
 [package]
 name = "foundryvtt-backup"
-version = "0.1.0"
+version = "0.2.0"
 description = "Back up and restore Foundry VTT worlds to a cloud-synced folder"
 authors = ["Grimgorg"]
 license = "MIT"

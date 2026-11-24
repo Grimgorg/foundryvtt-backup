@@ -13,7 +13,9 @@
 
 ## What it does
 
-- **Back up** a world, or all worlds at once, as a `.zip` into a folder you choose, for example in Dropbox, OneDrive, iCloud Drive, Google Drive, Nextcloud or Syncthing.
+- **Back up everything:** each world, plus your installed **modules, game systems and assets** (everything in Foundry's `Data` folder). Backups are `.zip` files in a folder you choose, for example in Dropbox, OneDrive, iCloud Drive, Google Drive, Nextcloud or Syncthing.
+- **Continue on another PC:** click **Restore all newer** there and you get the worlds plus every module and system. Nothing needs to be installed by hand.
+- **Open Foundry user data folder:** one click opens Foundry's `Config`/`Data`/`Logs` folder in Finder or Explorer.
 - **Restore** the latest backup, or any older one, with one click. It works on another PC too, even if the world doesn't exist there yet.
 - **Shows the dates:** when each world last changed on this PC, and when and on which PC each backup was made.
 - **Sync status per world:** *Up to date*, *Local changes*, *Newer backup* (from another PC), *Conflict*, *Not on this PC*, *No backup yet*.
@@ -64,7 +66,9 @@ The file name holds the world id, the time in UTC and the PC name. Each zip has 
 
 ### Good to know
 
-- Only the **world** is backed up, not modules or game systems. Install the same system and modules on each PC.
+- **Modules, systems & assets** form one backup, `_foundry-data` in the backup folder. Restoring it replaces those folders in `Data` and never touches your worlds. The previous folders are kept in `Data-before-restore` next to `Data`, which you can reach with *Open Foundry user data folder*.
+- Foundry's `Config` folder (license key, server settings) is **not** synced, because it belongs to each PC.
+- Use the same Foundry version on every PC.
 - Safety copies made before a restore are kept locally (last 5 per world). Find them via the *Safety copies* link at the bottom of the app.
 - The sync status is remembered per PC. The first time, before you have backed up or restored on a PC, it is estimated from file dates and shown with a `?`.
 

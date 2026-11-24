@@ -100,6 +100,5 @@ The builds are **not signed** for now, which is fine for personal use.
 
 - Scheduled/automatic backups (e.g. on app start or every N hours)
 - Auto-updater (`tauri-plugin-updater`, needs signed update artifacts)
-- Optional backup of `Data/modules` and `Data/systems`
 - Warning when the target PC lacks the world's game system or modules
 - Tray icon / run in background
