@@ -19,8 +19,8 @@ A single binary can't run on all three operating systems, so each OS gets its ow
 | OS | Main file | Also attached |
 |---|---|---|
 | Windows 10/11 (x64) | `FoundryVTT-Backup_<ver>_windows_x64_portable.exe`: one file, no install | NSIS installer `*-setup.exe` |
-| macOS 10.15+ (Apple Silicon + Intel) | `FoundryVTT Backup_<ver>_universal.dmg` | `*.app.tar.gz` |
-| Linux x64 | `FoundryVTT Backup_<ver>_amd64.AppImage`: one file, `chmod +x` and run | `.deb` |
+| macOS 10.15+ (Apple Silicon + Intel) | `FoundryVTT.Backup_<ver>_universal.dmg` | `*.app.tar.gz` |
+| Linux x64 | `FoundryVTT.Backup_<ver>_amd64.AppImage`: one file, `chmod +x` and run | `.deb` |
 
 The portable Windows exe uses the Microsoft Edge WebView2 runtime. It is preinstalled on Windows 11 and on up-to-date Windows 10. The installer can install WebView2 itself if it is missing.
 

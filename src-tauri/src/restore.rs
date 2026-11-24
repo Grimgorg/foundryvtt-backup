@@ -1,4 +1,4 @@
-//! Restoring a world from a backup zip.
+//! Restoring a world, or the modules/systems/assets, from a backup zip.
 
 use crate::backup::{self, MANIFEST_NAME};
 use crate::error::{AppError, Context, Result};
@@ -51,7 +51,7 @@ pub fn restore_backup(
         if let Some(safety_dir) = safety_dir {
             fs::create_dir_all(safety_dir)?;
             let dest = safety_dir.join(format!("{world_id}__{stamp}.zip"));
-            backup::write_zip_atomic(&world_dir, world_id, None, &dest, &|_, _| {})
+            backup::write_zip_atomic(&world_dir, world_id, &[], None, &dest, &|_, _| {})
                 .context("Could not make a safety copy of the current world")?;
             prune_safety_copies(safety_dir, world_id, KEEP_SAFETY_COPIES);
         }
@@ -91,10 +91,96 @@ pub fn restore_backup(
     Ok(())
 }
 
+/// Folder (next to `Data`) that keeps the previous modules/systems/assets
+/// after a data restore, so nothing is lost. Replaced on every data restore.
+pub const PREVIOUS_DATA_DIR: &str = "Data-before-restore";
+
+/// Replaces the top-level folders of Foundry's `Data` folder (modules,
+/// systems, assets, ...) with the ones in a data backup. `Data/worlds` is
+/// never touched. The replaced folders are moved to
+/// `<user data>/Data-before-restore/`.
+pub fn restore_data_backup(
+    zip_path: &Path,
+    data_dir: &Path,
+    progress: backup::Progress,
+) -> Result<PathBuf> {
+    if foundry::is_data_in_use(data_dir, backup::DATA_SKIP) {
+        return Err(AppError::new(
+            "A world is open in Foundry. Return to setup in Foundry first.",
+        ));
+    }
+    let file = File::open(zip_path).context(format!("Cannot open {}", zip_path.display()))?;
+    let mut ar = ZipArchive::new(file)?;
+    let plan = plan_entries(&mut ar, backup::DATA_PREFIX)?;
+    if plan.iter().any(|(_, p, _)| top_name(p).is_some_and(|t| backup::DATA_SKIP.contains(&t.as_str()))) {
+        return Err(AppError::new("This data backup contains worlds; refusing to restore it."));
+    }
+    let mut tops: Vec<String> = plan.iter().filter_map(|(_, p, _)| top_name(p)).collect();
+    tops.sort();
+    tops.dedup();
+    if tops.is_empty() {
+        return Err(AppError::new("This data backup is empty."));
+    }
+
+    fs::create_dir_all(data_dir).context(format!("Cannot create {}", data_dir.display()))?;
+    let stamp = Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let staging = data_dir.join(format!(".restoring-{stamp}"));
+    if let Err(e) = extract_entries(&mut ar, &plan, &staging, progress) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+
+    let previous = data_dir
+        .parent()
+        .unwrap_or(data_dir)
+        .join(PREVIOUS_DATA_DIR);
+    let _ = fs::remove_dir_all(&previous);
+    fs::create_dir_all(&previous)?;
+
+    // Swap each top-level entry; roll everything back on the first failure.
+    let mut moved_old: Vec<String> = Vec::new();
+    let mut placed: Vec<String> = Vec::new();
+    let mut failure = None;
+    for name in &tops {
+        let target = data_dir.join(name);
+        if target.exists() || target.is_symlink() {
+            if let Err(e) = fs::rename(&target, previous.join(name)) {
+                failure = Some(format!("Could not move away {name} (is Foundry running?): {e}"));
+                break;
+            }
+            moved_old.push(name.clone());
+        }
+        if let Err(e) = fs::rename(staging.join(name), &target) {
+            failure = Some(format!("Could not move restored {name} into place: {e}"));
+            break;
+        }
+        placed.push(name.clone());
+    }
+    if let Some(msg) = failure {
+        for name in &placed {
+            let _ = fs::remove_dir_all(data_dir.join(name)).or_else(|_| fs::remove_file(data_dir.join(name)));
+        }
+        for name in &moved_old {
+            let _ = fs::rename(previous.join(name), data_dir.join(name));
+        }
+        let _ = fs::remove_dir_all(&staging);
+        return Err(AppError::new(msg));
+    }
+    let _ = fs::remove_dir_all(&staging);
+    Ok(previous)
+}
+
+fn top_name(p: &Path) -> Option<String> {
+    match p.components().next()? {
+        Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
 /// (zip index, path relative to the world folder, is_dir). The leading
 /// `<world_id>/` folder is stripped; the manifest is skipped. Any unsafe
 /// path (absolute, `..`) aborts the restore.
-fn plan_entries(ar: &mut ZipArchive<File>, world_id: &str) -> Result<Vec<(usize, PathBuf, bool)>> {
+fn plan_entries(ar: &mut ZipArchive<File>, prefix: &str) -> Result<Vec<(usize, PathBuf, bool)>> {
     let mut out = Vec::with_capacity(ar.len());
     for i in 0..ar.len() {
         let f = ar.by_index(i)?;
@@ -113,7 +199,7 @@ fn plan_entries(ar: &mut ZipArchive<File>, world_id: &str) -> Result<Vec<(usize,
             continue;
         }
         let rel = path
-            .strip_prefix(world_id)
+            .strip_prefix(prefix)
             .map(Path::to_path_buf)
             .unwrap_or(path);
         if rel.as_os_str().is_empty() {
@@ -289,6 +375,68 @@ mod tests {
         z.finish().unwrap();
         assert!(restore_backup(&z_path, &worlds, "delta", None, &|_, _| {}).is_err());
         assert_eq!(snapshot(&w), before);
+    }
+
+    fn make_data(data: &Path) {
+        make_world(&data.join("worlds"), "w1");
+        fs::create_dir_all(data.join("modules/dice/packs/macros")).unwrap();
+        fs::write(data.join("modules/dice/module.json"), b"{}").unwrap();
+        fs::write(data.join("modules/dice/packs/macros/LOCK"), b"").unwrap();
+        fs::create_dir_all(data.join("systems/dnd5e")).unwrap();
+        fs::write(data.join("systems/dnd5e/system.json"), b"{}").unwrap();
+        fs::create_dir_all(data.join("assets/maps")).unwrap();
+        fs::write(data.join("assets/maps/a.webp"), b"img").unwrap();
+    }
+
+    #[test]
+    fn data_backup_and_restore_to_new_pc() {
+        use crate::backup::{create_data_backup, DATA_ID};
+        let d = tempfile::tempdir().unwrap();
+        let pc1 = d.path().join("pc1/FoundryVTT/Data");
+        let pc2 = d.path().join("pc2/FoundryVTT/Data");
+        let cloud = d.path().join("cloud");
+        make_data(&pc1);
+        let b = create_data_backup(&pc1, &cloud, "pc1", 10, &|_, _| {}).unwrap();
+        assert_eq!(b.world_id, DATA_ID);
+        // Worlds are not in the data backup.
+        let mut ar = ZipArchive::new(File::open(&b.path).unwrap()).unwrap();
+        assert!(ar.by_name("Data/modules/dice/module.json").is_ok());
+        assert!(ar.by_name("Data/worlds/w1/world.json").is_err());
+        drop(ar);
+
+        // PC2 has an old module and its own world; the world must survive.
+        make_world(&pc2.join("worlds"), "mine");
+        fs::create_dir_all(pc2.join("modules/old")).unwrap();
+        fs::write(pc2.join("modules/old/module.json"), b"old").unwrap();
+        let prev = restore_data_backup(Path::new(&b.path), &pc2, &|_, _| {}).unwrap();
+
+        let mut expected = snapshot(&pc1);
+        expected.retain(|(p, _)| !p.starts_with("worlds/"));
+        let mut got = snapshot(&pc2);
+        got.retain(|(p, _)| !p.starts_with("worlds/"));
+        assert_eq!(got, expected);
+        assert!(pc2.join("worlds/mine/world.json").is_file());
+        assert!(prev.join("modules/old/module.json").is_file());
+        let names: Vec<String> = fs::read_dir(&pc2)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(names.is_empty(), "{names:?}");
+    }
+
+    #[test]
+    fn data_restore_rejects_worlds_in_zip() {
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("Data");
+        make_data(&data);
+        let z_path = d.path().join("x.zip");
+        let mut z = zip::ZipWriter::new(File::create(&z_path).unwrap());
+        z.start_file("Data/worlds/evil/world.json", SimpleFileOptions::default()).unwrap();
+        z.write_all(b"{}").unwrap();
+        z.finish().unwrap();
+        assert!(restore_data_backup(&z_path, &data, &|_, _| {}).is_err());
+        assert!(data.join("worlds/w1/world.json").is_file());
     }
 
     #[test]

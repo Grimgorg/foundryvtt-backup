@@ -32,8 +32,8 @@ Get the file for your OS from the [latest release](https://github.com/Grimgorg/f
 | OS | File |
 |---|---|
 | Windows 10/11 | `FoundryVTT-Backup_<ver>_windows_x64_portable.exe`: single file, just run it. Or use the `-setup.exe` installer. |
-| macOS (Apple Silicon & Intel) | `FoundryVTT Backup_<ver>_universal.dmg` |
-| Linux | `FoundryVTT Backup_<ver>_amd64.AppImage` (`chmod +x`, then run), or the `.deb` |
+| macOS (Apple Silicon & Intel) | `FoundryVTT.Backup_<ver>_universal.dmg` |
+| Linux | `FoundryVTT.Backup_<ver>_amd64.AppImage` (`chmod +x`, then run), or the `.deb` |
 
 > The builds are not code-signed yet.
 > **macOS:** right-click the app → *Open* → *Open* the first time, or run `xattr -cr "/Applications/FoundryVTT Backup.app"`.
