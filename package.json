@@ -1,0 +1,26 @@
+{
+  "name": "foundryvtt-backup",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Back up and restore Foundry VTT worlds to a cloud-synced folder.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "icon": "node scripts/render-icon.mjs && tauri icon app-icon.png"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "@tauri-apps/plugin-opener": "^2.7.3"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@tauri-apps/cli": "^2.12.6",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.0"
+  }
+}

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FoundryVTT Backup</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <img class="logo" src="/logo.png" alt="" width="40" height="40" />
+      <div class="brand">
+        <h1>FoundryVTT Backup</h1>
+        <p class="muted" id="host-line">&nbsp;</p>
+      </div>
+      <div class="spacer"></div>
+      <button id="btn-refresh" class="btn ghost" title="Reload worlds and backups">Refresh</button>
+      <button id="btn-backup-all" class="btn primary">Back up all</button>
+    </header>
+
+    <main>
+      <section class="card settings" aria-label="Settings">
+        <div class="setting">
+          <label for="backup-dir">Backup folder <span class="muted">(cloud-synced)</span></label>
+          <div class="path-row">
+            <input id="backup-dir" type="text" readonly placeholder="Not set — choose your cloud folder" />
+            <button class="btn" id="btn-choose-backup">Choose…</button>
+            <button class="btn ghost" id="btn-open-backup" title="Open in file manager">Open</button>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="worlds-dir">Foundry worlds folder <span class="muted">(this PC)</span></label>
+          <div class="path-row">
+            <input id="worlds-dir" type="text" readonly placeholder="Not set — choose Foundry's Data/worlds folder" />
+            <button class="btn" id="btn-choose-worlds">Choose…</button>
+            <button class="btn ghost" id="btn-detect-worlds" title="Find Foundry's default worlds folder">Auto-detect</button>
+            <button class="btn ghost" id="btn-open-worlds" title="Open in file manager">Open</button>
+          </div>
+        </div>
+        <div class="setting inline">
+          <label for="keep-last">Keep the last</label>
+          <input id="keep-last" type="number" min="0" max="999" step="1" />
+          <span class="muted">backups per world (0 = keep all)</span>
+        </div>
+      </section>
+
+      <section id="progress" class="card progress" hidden>
+        <div class="progress-label" id="progress-label">Working…</div>
+        <div class="bar"><div class="fill" id="progress-fill"></div></div>
+      </section>
+
+      <section id="worlds" aria-label="Worlds" aria-live="polite"></section>
+    </main>
+
+    <footer class="muted">
+      <span id="version"></span>
+      · <a href="#" id="link-safety">Safety copies</a>
+      · Not affiliated with Foundry Gaming LLC
+    </footer>
+
+    <div id="toasts" aria-live="assertive"></div>
+  </body>
+</html>
